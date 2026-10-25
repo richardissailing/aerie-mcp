@@ -215,9 +215,13 @@ variable "lambda_zip_path" {
 }
 
 variable "lambda_memory_mb" {
-  description = "Lambda memory; CPU scales with it, which speeds up fan-out to many tenants."
+  description = <<-EOT
+    Lambda memory. CPU scales with it, and 1769 MB is one full vCPU; cold starts are CPU-bound
+    (about 1s of imports), so they get faster with more memory. Requests are short and infrequent,
+    so the cost difference is small.
+  EOT
   type        = number
-  default     = 1024
+  default     = 1769
 }
 
 variable "lambda_timeout_seconds" {

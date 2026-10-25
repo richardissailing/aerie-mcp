@@ -121,3 +121,23 @@ def test_rate_limited_call_is_not_slept_through_when_reset_is_far():
     with pytest.raises(FalconError) as exc:
         _pool(client).command(TENANT, "Op")
     assert exc.value.status == 429 and client.calls == 1
+
+
+def test_falcon_clients_reuse_connections(monkeypatch):
+    from falcon_fleet_mcp import falcon
+
+    captured = {}
+    monkeypatch.setattr(falcon, "load_credentials", lambda ref: {"client_id": "i", "client_secret": "s"})
+    monkeypatch.setattr(falcon, "APIHarnessV2", lambda **kw: captured.update(kw) or object())
+    falcon.ClientPool._build(TENANT)
+    assert isinstance(captured["session"], falcon.requests.Session)
+    assert captured["session"].get_adapter("https://api.crowdstrike.com").max_retries.connect == 1
+
+
+def test_falcon_sessions_retry_a_dead_connection_without_resending_writes():
+    from falcon_fleet_mcp.falcon import http_session
+
+    retry = http_session().get_adapter("https://api.crowdstrike.com").max_retries
+    assert retry.connect == 1 and retry.status == 0
+    assert retry.is_retry("GET", 0) is False  # status codes are handled by ClientPool, not urllib3
+    assert "GET" in retry.allowed_methods and not {"POST", "PATCH"} & set(retry.allowed_methods)

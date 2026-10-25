@@ -316,3 +316,19 @@ async def test_token_endpoint_outage_is_a_502_not_a_crash(server):
     r = httpx.post(f"{base}/token", data={"client_id": CLIENT_ID, "grant_type": "refresh_token", "refresh_token": "x"})
     assert r.status_code == 502 and r.json()["error"] == "temporarily_unavailable"
     assert r.headers["cache-control"] == "no-store"
+
+
+async def test_fleet_overview_calls_run_in_parallel_within_a_tenant(server, make_token, monkeypatch):
+    base, _ = server()
+    original = FakeFalcon.command
+
+    def slow(self, operation, **kwargs):
+        time.sleep(0.3)
+        return original(self, operation, **kwargs)
+
+    monkeypatch.setattr(FakeFalcon, "command", slow)
+    started = time.monotonic()
+    err, out = await call(base, make_token("analyst@corp.com"), "fleet_overview", {"tenants": ["corp-us"]})
+    elapsed = time.monotonic() - started
+    assert not err and out["results"]["corp-us"]["data"]["hosts"] == 3
+    assert elapsed < 1.2, f"5 calls of 0.3s took {elapsed:.2f}s; expected first alone + 4 in parallel (~0.6s)"

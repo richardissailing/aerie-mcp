@@ -8,6 +8,7 @@ import json
 import logging
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Literal
 
 import pydantic_core
@@ -136,6 +137,11 @@ class FleetTools:
         self.settings = settings
         self.registry = registry
         self.pool = pool
+        # For calls made in parallel *within* one tenant. Separate from the fan-out pool, whose
+        # workers block on these and would deadlock if they shared it.
+        self._per_tenant = ThreadPoolExecutor(
+            max_workers=settings.fanout_concurrency * 4, thread_name_prefix="falcon-tenant"
+        )
 
     # --- access control ------------------------------------------------------------------
 
@@ -264,15 +270,26 @@ class FleetTools:
             "contained_hosts": ("QueryDevicesByFilter", "status:'contained'"),
             "hosts_not_seen_7d": ("QueryDevicesByFilter", "last_seen:<'now-7d'"),
         }
+        def count(item: tuple[str, tuple[str, str | None]]) -> tuple[str, Any]:
+            name, (operation, fql) = item
+            # One missing API scope (say Hosts: Read) should blank its metrics, not the whole tenant.
+            try:
+                return name, self._count(tenant, operation, fql)
+            except FalconError as exc:
+                return name, exc
+
+        items = list(metrics.items())
+        # The first call runs alone so the client is built and signed in once, then the rest go in
+        # parallel: about two round trips per tenant instead of five.
+        results = [count(items[0]), *self._per_tenant.map(count, items[1:])]
         out: dict[str, Any] = {}
         errors: dict[str, str] = {}
         first: FalconError | None = None
-        for name, (operation, fql) in metrics.items():
-            # One missing API scope (say Hosts: Read) should blank its metrics, not the whole tenant.
-            try:
-                out[name] = self._count(tenant, operation, fql)
-            except FalconError as exc:
-                out[name], errors[name], first = None, str(exc), first or exc
+        for name, value in results:
+            if isinstance(value, FalconError):
+                out[name], errors[name], first = None, str(value), first or value
+            else:
+                out[name] = value
         if first is not None and len(errors) == len(metrics):
             raise first
         if errors:

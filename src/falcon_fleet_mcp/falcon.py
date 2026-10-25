@@ -18,7 +18,10 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, TypeVar
 
+import requests
 from falconpy import APIHarnessV2
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 from .config import Settings, aws_client
 from .registry import Tenant
@@ -94,6 +97,21 @@ def _retry_wait(response: dict[str, Any]) -> float | None:
     return max(0.0, wait) if wait <= MAX_RETRY_WAIT else None
 
 
+def http_session() -> requests.Session:
+    """A pooled session for one Falcon client.
+
+    Lambda freezes between invocations and Falcon may close an idle kept-alive connection in the
+    meantime, so the first call after a thaw can hit a dead socket. Retry once: connection errors
+    happen before anything is sent, and read errors are retried for GET only, so a POST or PATCH
+    (containment, alert updates) is never sent twice.
+    """
+    retry = Retry(total=1, connect=1, read=1, status=0, other=0, allowed_methods=frozenset({"GET"}),
+                  raise_on_status=False)  # fmt: skip
+    session = requests.Session()
+    session.mount("https://", HTTPAdapter(max_retries=retry))
+    return session
+
+
 class ClientPool:
     def __init__(self, settings: Settings, factory: Callable[[Tenant], Any] | None = None):
         self._settings = settings
@@ -114,6 +132,9 @@ class ClientPool:
             client_id=creds["client_id"],
             client_secret=creds["client_secret"],
             base_url=base_url,
+            # Keep connections open between calls: without a session every call pays a new TCP and
+            # TLS handshake, two extra round trips from Sydney to a US or EU Falcon cloud.
+            session=http_session(),
             member_cid=tenant.member_cid,
             user_agent=USER_AGENT,
             timeout=20,

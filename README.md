@@ -60,7 +60,7 @@ writes a JSON audit line (user, tenants, tool, filter, reason, outcome) to Cloud
 
 ## Deploy
 
-Prerequisites: `uv`, Terraform ≥ 1.9, AWS credentials for the target account, and admin access to IAM Identity Center.
+Prerequisites: `uv` (Python 3.15), Terraform ≥ 1.9, AWS credentials for the target account, and admin access to IAM Identity Center.
 
 ### 1. Test and build
 
@@ -68,7 +68,7 @@ Prerequisites: `uv`, Terraform ≥ 1.9, AWS credentials for the target account, 
 uv sync
 uv run pytest                      # Python tests (AWS calls run against moto)
 (cd terraform && terraform init && terraform test)   # applies the stack to a mocked AWS provider
-./scripts/build_lambda.sh          # -> build/lambda.zip (python3.13, arm64)
+./scripts/build_lambda.sh          # -> build/lambda.zip (python3.15, arm64)
 ```
 
 ### 2. First apply (creates Cognito, Lambda, secrets and the registry; no SAML yet)
@@ -177,6 +177,12 @@ Access tokens are checked against the Cognito JWKS: issuer, expiry, `token_use=a
 
 ## Operational notes
 
+- **Python 3.15 runtime (preview)**: the Lambda uses `python3.15`, which AWS offers as a public
+  preview until general availability (targeted for November 2026). Preview runtimes aren't covered by
+  the Lambda SLA or AWS Support and may still change. To fall back, set `runtime = "python3.14"` in
+  `terraform/main.tf`, change `--python-version` in `scripts/build_lambda.sh`, lower
+  `requires-python` in `pyproject.toml`, then rebuild and apply.
+
 - **Alarms**: set `alarm_email` to get emailed when calls are denied (`alarm_denied_threshold` in
   5 minutes, default 10), when any action runs (`alarm_on_actions`), or when the Lambda errors.
   The `DeniedCalls` and `ActionsExecuted` metrics are always published under `FalconFleetMcp/<name>`.
@@ -184,6 +190,11 @@ Access tokens are checked against the Cognito JWKS: issuer, expiry, `token_use=a
 
 - **Region**: everything deploys to `ap-southeast-2` (Sydney). Falcon API calls still go to each
   tenant's own Falcon cloud (US-1, US-2, EU-1, …).
+- **Performance**: most of a request is network time to the Falcon clouds, so the server keeps
+  connections open between calls (no new TLS handshake per call) and runs `fleet_overview`'s counts in
+  parallel per tenant. Cold starts take about 1s of imports: the package ships precompiled bytecode,
+  because Lambda's read-only filesystem would otherwise force a recompile on every cold start (about 2.5s),
+  and the default 1769 MB of memory gives the function a full vCPU for that CPU-bound start.
 - **Time budget**: a request that queries many tenants stops at `FANOUT_DEADLINE_SECONDS` (the Lambda
   timeout minus 10s). Tenants it didn't reach are reported in `tenants_failed` instead of the whole call timing out.
 - **Rate limits**: Falcon rate limits apply per CID. `FANOUT_CONCURRENCY` (default 8) and the Lambda's

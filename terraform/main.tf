@@ -159,7 +159,7 @@ resource "aws_iam_role_policy" "lambda" {
 resource "aws_lambda_function" "this" {
   function_name    = var.name
   role             = aws_iam_role.lambda.arn
-  runtime          = "python3.13"
+  runtime          = "python3.15" # public preview until GA (target Nov 2026): no Lambda SLA or AWS support
   architectures    = ["arm64"]
   handler          = "run.sh"
   filename         = var.lambda_zip_path
