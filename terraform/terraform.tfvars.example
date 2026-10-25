@@ -1,0 +1,51 @@
+aws_region            = "ap-southeast-2" # Sydney
+cognito_domain_prefix = "acme-falcon-mcp" # must be globally unique
+
+identity_store_id       = "d-1234567890"
+identity_store_region   = "ap-southeast-2" # wherever Identity Center is enabled
+identity_store_role_arn = null              # set if Identity Center is in another account
+user_lookup_attribute   = "email"
+
+# Empty on the first apply; see README step 3.
+identity_center_saml_metadata_url = ""
+
+falcon_credentials = {
+  corp-us1   = { description = "Corporate tenant (US-1)" }
+  mssp-parent = { description = "Flight Control parent (US-2)" }
+  apac-eu1   = { description = "APAC tenant (EU-1)" }
+}
+
+tenants = {
+  corp = {
+    display_name  = "Corporate"
+    base_url      = "us1"
+    credential    = "corp-us1"
+    allow_actions = true
+  }
+  subsidiary-a = {
+    display_name  = "Subsidiary A (Flight Control child)"
+    base_url      = "us2"
+    credential    = "mssp-parent"
+    member_cid    = "0123456789abcdef0123456789abcdef"
+    allow_actions = true
+  }
+  subsidiary-b = {
+    display_name = "Subsidiary B (Flight Control child)"
+    base_url     = "us2"
+    credential   = "mssp-parent"
+    member_cid   = "fedcba9876543210fedcba9876543210"
+  }
+  apac = {
+    display_name = "APAC"
+    base_url     = "eu1"
+    credential   = "apac-eu1"
+  }
+}
+
+access_grants = [
+  { group = "SOC-Analysts", tenants = ["*"], role = "reader" },
+  { group = "IR-Global", tenants = ["*"], role = "responder" },
+  { group = "Subsidiary-A-Security", tenants = ["subsidiary-a"], role = "responder" },
+]
+
+actions_enabled = false # flip on once read-only use is validated
